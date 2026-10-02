@@ -1,0 +1,12 @@
+target/
+
+# Decompiled Mirror's Edge script and unpacked game packages: never commit these.
+*.uc
+tools/me-extract/*.u
+tools/me-extract/*.upk
+tools/me-extract/*.decomp
+
+# Local settings, logs, Python caches.
+settings.txt
+__pycache__/
+*.log

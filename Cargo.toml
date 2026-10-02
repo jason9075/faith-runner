@@ -1,0 +1,24 @@
+[workspace]
+members = [".", "crates/*"]
+
+[package]
+name = "faith-runner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+faith_move = { path = "crates/faith_move" }
+me_assets = { path = "crates/me_assets" }
+faith_anim = { path = "crates/faith_anim" }
+bevy = { version = "0.19.1", default-features = false, features = ["3d", "ui", "audio", "wav"] }
+
+# Fast-ish dev builds: optimize dependencies, keep our code debuggable.
+[features]
+# The Mirror's Edge prologue map, drawn and playable from your install (FAITH_MAP=prologue).
+# Not part of the public source.
+prologue = ["me_assets/prologue"]
+
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
