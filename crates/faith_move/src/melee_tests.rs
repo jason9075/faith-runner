@@ -14,7 +14,7 @@ fn floor() -> MeshWorld {
 
 /// Someone standing `at` (feet), Mirror's Edge-sized (a 30 x 90 uu cylinder).
 fn someone(id: u32, at: Vec3) -> Target {
-    Target { id, centre: at + Vec3::Y * 0.9, radius: 0.3, half_height: 0.9, eye: 0.6 }
+    Target { id, centre: at + Vec3::Y * 0.9, radius: 0.3, half_height: 0.9, eye: 0.6, facing: Vec3::Z }
 }
 
 fn standing() -> Controller {

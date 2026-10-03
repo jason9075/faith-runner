@@ -338,6 +338,8 @@ pub struct Tuning {
     /// ME: the attack animations' lengths (MeleeStart + MeleeMissed ≈ 0.7 s);
     /// the app sets these from the real animations.
     pub melee_clips: MeleeClips,
+    /// The takedown clips' lengths (takedown::TAKEDOWN_ANIMS): each takedown lasts its clip.
+    pub takedown_clips: [f32; 4],
     /// ME: TdMove_MeleeCrouch.SpeedModifier = 0.2 / guess for standing
     pub melee_speed: f32,
 }
@@ -504,6 +506,7 @@ impl Default for Tuning {
             swing_exit_gravity_time: 0.7,
 
             melee_clips: MeleeClips::default(),
+            takedown_clips: [2.53, 2.10, 2.03, 1.97],
             melee_speed: 0.4,
         }
     }

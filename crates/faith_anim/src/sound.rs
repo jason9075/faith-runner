@@ -45,6 +45,22 @@ const SURFACES: [Surface; 11] = [
 
 pub const RUN_WIND: &str = "A_Character_Effects.Movement.RunWind";
 
+/// A blow landing (TdPawn.PlayMeleeImpact): the struck material's TdPhysicalMaterialMelee
+/// ImpactSoundFist / ImpactSoundFoot; a person's are TDPhysicalMaterials' _Body and _Head sets.
+/// Punches and the wallrun kick (which aims at the eyes) land on the head, the rest on the body.
+pub fn impact_cue(kind: faith_move::MeleeKind) -> &'static str {
+    use faith_move::MeleeKind::*;
+    match kind {
+        Punch => "A_Character_Melee.A_Female.Fist_Head",
+        Crouch => "A_Character_Melee.A_Female.Fist_Body",
+        AirKick | SlideKick => "A_Character_Melee.A_Female.Foot_Body",
+        WallRunKick => "A_Character_Melee.A_Female.Foot_Head",
+    }
+}
+
+/// A door barged or kicked open (the training doors: the game's interactive door hit).
+pub const DOOR_HIT: &str = "A_Props_Interactive.Doors.Door_Hit";
+
 /// Footstep (1–11) or handstep (21–25) cue for a surface. The game names
 /// these A_Material_Footstep.<Material>._03_Female_FootStepRun and so on.
 pub fn step_cue_on(n: i32, surface: Surface) -> Option<String> {
@@ -142,8 +158,12 @@ pub fn wanted_cues(arms: Option<&FaithArms>) -> Vec<String> {
         "A_Character_Female_01.Body.BodySlide",
         "A_Character_Female_01.Body.BodyFall",
         RUN_WIND,
+        DOOR_HIT,
     ] {
         wanted.push(c.into());
+    }
+    for kind in [faith_move::MeleeKind::Punch, faith_move::MeleeKind::Crouch, faith_move::MeleeKind::AirKick, faith_move::MeleeKind::WallRunKick] {
+        wanted.push(impact_cue(kind).into());
     }
     if let Some(a) = arms {
         let mut cues: Vec<String> = a
@@ -349,6 +369,8 @@ impl Director {
                 MoveEvent::BalanceFall | MoveEvent::Melee { .. } if !anim_driven => {
                     self.play_move("A_Character_Female_01.Oral_Strain.Medium", 0.7, &c.state, out);
                 }
+                MoveEvent::MeleeHit { kind, .. } => self.play_move(impact_cue(kind), 1.0, &c.state, out),
+                MoveEvent::DoorOpened { .. } => self.play_move(DOOR_HIT, 1.0, &c.state, out),
                 MoveEvent::Jump | MoveEvent::WallJump | MoveEvent::WallKick | MoveEvent::Dodge { .. } => {
                     if self.rand() < 0.5 {
                         self.play_move("A_Character_Female_01.Oral_Strain.Soft", 0.6, &c.state, out);
@@ -413,5 +435,29 @@ mod tests {
         assert!(played.iter().any(|c| c.contains("landsoft") || c.contains("landmedium") || c.contains("landhard")), "{played:?}");
         let wind = all.iter().filter_map(|c| if let SoundCmd::Volume(_, v) = c { Some(*v) } else { None }).fold(0.0f32, f32::max);
         assert!(wind > 0.05, "wind rose to {wind}");
+    }
+
+    /// A blow that lands plays the game's impact (a punch the fist on the head, a slide kick the
+    /// foot on the body), and a door knocked open its hit.
+    #[test]
+    fn hits_and_doors_sound() {
+        let level = greybox::greybox();
+        let cp = &level.checkpoints[0];
+        let mut c = Controller::new(Tuning::default(), cp.spawn, cp.yaw);
+        let mut d = Director::new(cues());
+        let mut played = vec![];
+        for kind in [faith_move::MeleeKind::Punch, faith_move::MeleeKind::SlideKick] {
+            c.events = vec![MoveEvent::MeleeHit { target: 1, damage: 30.0, momentum: glam::Vec3::ZERO, kind }];
+            let mut out = vec![];
+            d.update(1.0 / 60.0, &c, &[], true, 0.0, &|_| Surface::Concrete, &mut out);
+            played.extend(out.into_iter().filter_map(|c| if let SoundCmd::Play { cue, .. } = c { Some(cue) } else { None }));
+        }
+        c.events = vec![MoveEvent::DoorOpened { door: 0 }];
+        let mut out = vec![];
+        d.update(1.0 / 60.0, &c, &[], true, 0.0, &|_| Surface::Concrete, &mut out);
+        played.extend(out.into_iter().filter_map(|c| if let SoundCmd::Play { cue, .. } = c { Some(cue) } else { None }));
+        for want in ["a_character_melee.a_female.fist_head", "a_character_melee.a_female.foot_body", "a_props_interactive.doors.door_hit"] {
+            assert!(played.iter().any(|p| p == want), "{want} in {played:?}");
+        }
     }
 }

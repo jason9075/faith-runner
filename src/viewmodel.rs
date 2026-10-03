@@ -260,8 +260,8 @@ fn target(
         MoveState::LayOnGround { .. } | MoveState::SoftLand { .. } | MoveState::Stumble { .. } => {
             pose(Vec3::new(s * 0.40, -0.30, -0.25), -s * 0.4, -0.2, s * 0.8)
         }
-        // Shoulder or boot into the door.
-        MoveState::Barge { .. } => pose(Vec3::new(s * 0.18, -0.15, -0.30), -s * 0.3, 0.2, s * 0.6),
+        // Shoulder or boot into the door; reaching for someone (the app has no one to take down).
+        MoveState::Barge { .. } | MoveState::Takedown { .. } => pose(Vec3::new(s * 0.18, -0.15, -0.30), -s * 0.3, 0.2, s * 0.6),
         MoveState::Balance { lean, .. } => {
             // Arms out for balance, dipping on the side you're leaning to.
             pose(Vec3::new(s * 0.46, -0.16 - 0.10 * lean * s, -0.36), -s * 0.5, 0.1, s * 1.5)

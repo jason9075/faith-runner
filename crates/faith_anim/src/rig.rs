@@ -219,6 +219,12 @@ impl Rig {
         len("MeleeInAirHit", 1.0, &mut c.air_hit);
         len("MeleeSlide", 1.0, &mut c.slide);
         len("MeleeWallRunLeft", 1.0, &mut c.wallrun);
+        // A takedown lasts its clip (TdMOVE_Disarm.OnCustomAnimEnd).
+        for (i, seq) in faith_move::TAKEDOWN_ANIMS.iter().enumerate() {
+            if let Some(l) = Driver::length(arms, seq) {
+                t.takedown_clips[i] = l;
+            }
+        }
         // The 180 turns follow their clips' root rotation.
         let curve = |seq: &str| self.driver.root_yaw_curve(arms, seq).unwrap_or_default();
         t.turn_curves = Some(std::sync::Arc::new(faith_move::TurnCurves {
@@ -226,7 +232,7 @@ impl Rig {
             stand: curve("StandTurn180Right"),
             air: curve("JumpTurnFly"),
             wallclimb: curve("wallrunvertical180turn"),
-            swing: curve("Swing180"),
+            swing: curve("swing180"),
         }));
     }
 }

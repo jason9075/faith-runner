@@ -29,6 +29,8 @@ pub struct Target {
     pub half_height: f32,
     /// Its eyes above the centre (BaseEyeHeight): where a wallrun kick aims.
     pub eye: f32,
+    /// Which way it faces (horizontal): a takedown from behind or the front.
+    pub facing: Vec3,
 }
 
 const fn uu(v: f32) -> f32 {
