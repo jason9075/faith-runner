@@ -216,6 +216,17 @@ pub fn plan(world: &dyn World, tu: &Tuning, body: Body, feet: Vec3, vel: Vec3, f
     if !world.is_free(&stand.aabb(end + Vec3::Y * 0.01)) {
         return None;
     }
+    // The way there is clear too: crouched, across the top from the lip and down to the end.
+    // (Where the end is inside something solid, as in a rock, its overlap alone can't tell:
+    // collision made of triangles has no inside, only surfaces.)
+    let crouch_half = Vec3::new(tu.half_width * 0.9, tu.crouch_height * 0.5, tu.half_width * 0.9);
+    let lip = Vec3::new(ledge.x, top + 0.05, ledge.z) + dir * 0.05 + Vec3::Y * crouch_half.y;
+    let above = Vec3::new(end.x, lip.y, end.z);
+    let across = above - lip;
+    let down = Vec3::new(end.x, end.y + 0.02, end.z) + Vec3::Y * crouch_half.y - above;
+    if world.sweep(crouch_half, lip, across).is_some() || (down.y < -0.01 && world.sweep(crouch_half, above, down).is_some()) {
+        return None;
+    }
 
     // UpdateActiveVaultType: the first type that fits.
     let momentum = speed * 100.0;

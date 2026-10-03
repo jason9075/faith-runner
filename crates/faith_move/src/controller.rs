@@ -35,27 +35,50 @@ pub struct Input {
 /// Which attack: Mirror's Edge picks it from what you're doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeleeKind {
-    /// Standing punch (TdMove_Melee stand attack), alternating hands.
+    /// On the ground, standing or running (TdMove_Melee): punches, alternating hands.
     Punch,
-    /// Running kick.
-    RunKick,
     /// Jump kick (TdMove_MeleeAir).
     AirKick,
     /// Sliding kick (TdMove_MeleeSlide).
     SlideKick,
     /// Kick off a wallrun (TdMove_MeleeWallrun).
     WallRunKick,
-    /// Crouching uppercut (TdMove_MeleeCrouch).
-    Uppercut,
+    /// Crouched (TdMove_MeleeCrouch): MeleeCrouchStart, then MeleeCrouchHit.
+    Crouch,
+}
+
+/// Where an attack is (TdMove_MeleeBase.MeleeState).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeleePhase {
+    /// The wind-up (MS_MeleeAttackNormal).
+    Start,
+    /// The follow-through after a hit or a miss.
+    Hit,
+    Missed,
 }
 
 /// An attack in progress. It plays over whatever move you're in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Melee {
     pub kind: MeleeKind,
+    /// Time in the current phase.
     pub t: f32,
-    /// Left hand/foot (attacks alternate).
+    /// Left hand/foot (punches alternate). For the wallrun kick: the wall was on the left.
     pub left: bool,
+    pub phase: MeleePhase,
+    /// The target chosen at the start (`Target::id`).
+    pub target: Option<u32>,
+    /// TdMove_MeleeAir: 0 from a moving jump, 1 from a still one, 2 coming down onto them.
+    pub air_type: u8,
+    /// The limb's sweep is on (bHitDetection); it comes on after `detect_in` seconds.
+    pub detecting: bool,
+    pub detect_in: Option<f32>,
+    /// TdMove_Melee's combo: punches queued, punches counted, and how long the window stays open.
+    pub queued: i32,
+    pub combo: i32,
+    pub window: f32,
+    /// The momentum a kick lands with (TdMove_MeleeAir: the velocity at the start x 1.6).
+    pub momentum: Vec3,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -199,6 +222,12 @@ pub enum Event {
     SwingStart,
     SwingJump,
     Melee { kind: MeleeKind, left: bool },
+    /// The wind-up ended: the hit or the miss follows (punches, the crouch attack; the air kick
+    /// when it connects).
+    MeleeOutcome { kind: MeleeKind, hit: bool },
+    /// An attack landed on a target (`Target::id`): Mirror's Edge's damage, and the momentum
+    /// (m/s) it hits with.
+    MeleeHit { target: u32, damage: f32, momentum: Vec3, kind: MeleeKind },
     /// Melee during the air 180 (TdMove_180TurnInAir.HandleMoveAction(MA_Melee)): Taunt.
     Taunt,
 }
@@ -392,6 +421,15 @@ pub struct Controller {
     /// The attack playing right now, if any.
     pub melee: Option<Melee>,
     melee_left: bool,
+    /// Who Faith can hit (the host's actors); none in the app.
+    pub targets: Vec<crate::melee::Target>,
+    /// Where the attacking limb is (`melee_bone`), from the animation; without one it's taken
+    /// as just ahead of her.
+    pub hit_bone: Option<Vec3>,
+    pub(crate) melee_last_start: Vec3,
+    pub(crate) speed_log: std::collections::VecDeque<(f32, f32)>,
+    /// Knocked back off an air kick: no air control until she lands.
+    pub(crate) melee_no_input: bool,
     /// Lighter gravity just after leaving a swing pole.
     low_grav: f32,
     /// In TdMove_DodgeJump (see `dodge_jump`).
@@ -413,13 +451,13 @@ pub struct Controller {
 
 const SUBSTEP: f32 = 1.0 / 120.0;
 
-fn forward(yaw: f32) -> Vec3 {
+pub(crate) fn forward(yaw: f32) -> Vec3 {
     Vec3::new(-yaw.sin(), 0.0, -yaw.cos())
 }
 fn right(yaw: f32) -> Vec3 {
     Vec3::new(yaw.cos(), 0.0, -yaw.sin())
 }
-fn horiz(v: Vec3) -> Vec3 {
+pub(crate) fn horiz(v: Vec3) -> Vec3 {
     Vec3::new(v.x, 0.0, v.z)
 }
 /// Unreal units per second (cm/s) to m/s, for thresholds written inline in the game's scripts.
@@ -470,6 +508,11 @@ impl Controller {
             coiled: false,
             melee: None,
             melee_left: false,
+            targets: Vec::new(),
+            hit_bone: None,
+            melee_last_start: Vec3::ZERO,
+            speed_log: Default::default(),
+            melee_no_input: false,
             low_grav: 0.0,
             dodging: false,
             look_at: None,
@@ -609,14 +652,15 @@ impl Controller {
         if input.turn_pressed && self.turn.is_none() && self.can_turn() {
             self.start_turn();
         }
-        if let Some(m) = &mut self.melee {
-            m.t += dt;
-            if m.t >= self.tuning.melee_time {
-                self.melee = None;
+        if input.melee_pressed {
+            if self.melee.is_some() {
+                self.melee_pressed_again();
+            } else {
+                self.start_melee();
             }
         }
-        if input.melee_pressed && self.melee.is_none() {
-            self.start_melee();
+        if self.melee_no_input {
+            input.move_axis = Vec2::ZERO;
         }
 
 
@@ -636,6 +680,10 @@ impl Controller {
             self.substep(h, &sub, world);
             remaining -= h;
             first = false;
+        }
+        self.melee_tick(dt.min(0.1));
+        if self.state == State::Ground {
+            self.melee_no_input = false;
         }
 
         if self.state != State::Air {
@@ -767,17 +815,44 @@ impl Controller {
             return;
         }
         let kind = match self.state {
-            State::Ground if self.crouched => MeleeKind::Uppercut,
-            State::Ground if self.horizontal_speed() > self.tuning.run_speed * 0.75 => MeleeKind::RunKick,
+            State::Ground if self.crouched => MeleeKind::Crouch,
             State::Ground => MeleeKind::Punch,
+            // TdMove_MeleeAir.CanDoMove: not in the first 0.1 s of a jump.
+            State::Air if self.jumped_since_ground && self.air_time < 0.1 => return,
             State::Air => MeleeKind::AirKick,
             State::Slide { .. } => MeleeKind::SlideKick,
             State::WallRun { .. } => MeleeKind::WallRunKick,
             _ => return,
         };
         self.melee_left = !self.melee_left;
-        let left = self.melee_left;
-        self.melee = Some(Melee { kind, t: 0.0, left });
+        let left = match self.state {
+            // bLeft: the wallrun was along a wall on her left.
+            State::WallRun { normal, .. } => normal.dot(right(self.yaw)) > 0.0,
+            _ => self.melee_left,
+        };
+        let mut m = Melee {
+            kind,
+            t: 0.0,
+            left,
+            phase: MeleePhase::Start,
+            target: self.melee_target(kind),
+            air_type: 0,
+            detecting: false,
+            detect_in: None,
+            queued: 0,
+            combo: 0,
+            // TdMove_Melee.TriggerMove: OpenWindow(0.33).
+            window: if kind == MeleeKind::Punch { 0.33 } else { 0.0 },
+            momentum: Vec3::ZERO,
+        };
+        match kind {
+            MeleeKind::AirKick => self.start_air_kick(&mut m),
+            MeleeKind::WallRunKick => self.start_wallrun_kick(&mut m),
+            // TdMove_MeleeSlide.TriggerMove: SetTimer(0.2542) turns the hit detection on.
+            MeleeKind::SlideKick => m.detect_in = Some(0.2542),
+            MeleeKind::Punch | MeleeKind::Crouch => {}
+        }
+        self.melee = Some(m);
         self.events.push(Event::Melee { kind, left });
     }
 
@@ -975,7 +1050,7 @@ impl Controller {
         // Running: Mirror's Edge's own ground movement (locomotion.rs, from the game's native
         // code). The controller asks for sprint or walk acceleration, CalcVelocity applies it
         // with friction or braking, capped at GroundSpeed x the move's SpeedModifier.
-        let attacking = self.melee.is_some_and(|m| matches!(m.kind, MeleeKind::Punch | MeleeKind::Uppercut));
+        let attacking = self.melee.is_some_and(|m| matches!(m.kind, MeleeKind::Punch | MeleeKind::Crouch));
         let speed_mod = if self.crouched {
             tu.crouch_speed_modifier
         } else if attacking {
@@ -1954,7 +2029,13 @@ impl Controller {
             let stand = Body { half_width: tu.half_width, height: tu.stand_height };
             let crouch = Body { half_width: tu.half_width, height: tu.crouch_height };
             let to = self.feet + -n * (2.0 * tu.half_width + 0.15);
-            let to = Vec3::new(to.x, ledge_y + 0.01, to.z);
+            // Onto whatever's up there: a roof that slopes up from the lip (up to 0.9 m higher
+            // under her) as well as a flat top.
+            let surface = crate::world::tops_below(world, Vec3::new(to.x, 0.0, to.z), tu.half_width, ledge_y + 0.9, ledge_y - 0.1)
+                .first()
+                .copied()
+                .unwrap_or(ledge_y);
+            let to = Vec3::new(to.x, surface.max(ledge_y) + 0.01, to.z);
             let end_crouched = !world.is_free(&stand.aabb(to));
             if end_crouched && !world.is_free(&crouch.aabb(to)) {
                 return;

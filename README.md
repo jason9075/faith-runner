@@ -86,7 +86,7 @@ It opens on a **settings menu**: master volume, music, effects, mouse sensitivit
   - **Grip**: the hands stay on the bar. As the game's `SwingControl` does, the whole skeleton pivots about the grip by the swing angle, and the view swings with it.
   - **Drawing**: while swinging the body is drawn in the world's depth (the move's `SDPG_Intermediate`), so the bar hides the fingers wrapped round it.
 - **Zipline**: jump up to a cable to grab it and ride it down, speeding up (`TdMove_ZipLine`: at least 3 m/s, +4 m/s² plus gravity down the slope). Jump to leap off, crouch to drop. You let go at the end, or if you hit something.
-- **Kicks and punches**: left mouse (or F), as in the game; the same button barges doors. Which attack depends on what you're doing, as in the game: a punch standing (alternating hands), a kick running, a jump kick in the air, a sliding kick, a wallrun kick, an uppercut crouched. There's nothing to hit yet; they're the game's attack animations and sounds.
+- **Kicks and punches**: left mouse (or F), as in the game; the same button barges doors. Which attack depends on what you're doing, as in the game: punches on the ground, standing or running (alternating hands; press again within 0.33 s for another, `TdMove_Melee`'s combo window), a jump kick in the air (not in a jump's first 0.1 s), a sliding kick, a wallrun kick off the wall, a punch crouched. Each picks its target, tests the hit and deals the game's damage as Mirror's Edge does (`faith_move::melee`: `GetMeleeTarget`, `TestHit`, the limb sweep of `TdMove_MeleeBase`'s native tick); the maps have no one to hit, so here you see the misses.
 
 ## Faith's body and sounds (from your copy of Mirror's Edge)
 
@@ -144,7 +144,7 @@ Animations with root motion baked in (vaults, climbs, pull-ups, rolls, the ledge
 | Against a wall | Walk up to a wall and the arm(s) in front of it come up, palms flat on it: the game's `againstwall` pose on that arm (in 0.35 s, out 0.55 s) with the hand on the spot its trace hit (`ATdPawn::CheckAgainstWall`, `TdSkelControlAgainstWall`). Walking or crouched only |
 | Swing | `swinghardstart`, then the `swingposebacktop` / `swingposebackstraight` / `swingposefronttop` poses mixed by the swing angle (the game's `TdAnimNodeSwing`); `swingjumpoff` |
 | Zipline | `ziplinestart`, `ZipLine`, `ziplinehitwall` |
-| Attacks | `MeleeStartLeft`/`Right` → `MeleeMissedLeft`/`Right` (punch), `MeleeStart2…` → `MeleeMissed2…` (running), `MeleeInAir`, `MeleeSlide`, `MeleeWallRunLeft`/`Right`, `MeleeCrouchStartUpperCut` → `MeleeCrouchHitUppercut` |
+| Attacks | `MeleeStartLeft`/`Right` → `MeleeHitLeft`/`Right` or `MeleeMissedLeft`/`Right` (punch, at 1.5×), `MeleeInAir` / `MeleeInAirStill` / `MeleeFromAbove` (→ `MeleeInAirHit`), `MeleeSlide`, `MeleeWallRunLeft`/`Right`, `MeleeCrouchStart` → `MeleeCrouchHit` |
 
 Pull-up, slide and roll animations are driven by the move's progress, and vaults play their own animation at the game's rate (their phases are timed to it, and the clip's run-out keeps playing over your run after you land), so they finish exactly when the move does, and with the body loaded those moves take as long as the animation (a pull-up takes the game's 1.5 s). Blend times follow the move classes' own (`TdMove_Slide.AnimBlendTime` 0.5, `TdMove_Grab` 0.1, `TdMove_Jump` blend-in 0.1, and so on).
 

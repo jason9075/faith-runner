@@ -105,6 +105,8 @@ pub struct Driver {
     prev_state: Option<MoveState>,
     air_clip: &'static str,
     last_wall_side: f32,
+    /// The hand the last attack was thrown with (its follow-through uses the same).
+    melee_left: bool,
     /// Which sequences carry body travel (see [`is_travel`]).
     travel: HashMap<String, bool>,
     cam_bone: usize,
@@ -294,6 +296,7 @@ impl Driver {
             prev_state: None,
             air_clip: "jumpair",
             last_wall_side: 1.0,
+            melee_left: false,
             travel: HashMap::new(),
             cam_bone,
             rest_cam,
@@ -409,27 +412,45 @@ impl Driver {
         }
     }
 
-    /// A one-shot followed by another (melee wind-up, then the swing).
-    fn oneshot_then(&mut self, seq: &'static str, then: &'static str, arms: &FaithArms, blend: f32) {
-        self.oneshot(seq, arms, None, blend);
-        if let Some(o) = &mut self.oneshot {
-            o.then = Some(then);
+    /// A one-shot played at `rate` (PlayMoveAnim's rate), blending in over `blend` and out over
+    /// `out`.
+    fn oneshot_rate(&mut self, seq: &'static str, arms: &FaithArms, rate: f32, blend: f32, out: f32) {
+        let len = Self::length(arms, seq).unwrap_or(0.5) / rate;
+        self.oneshot = Some(OneShot { key: seq, until: self.clock + len, then: None, blend_out: out });
+        let key = format!("{seq}#{}", self.clock);
+        self.want(&key, Source::Play { seq, time: 0.0, rate, looping: false }, blend);
+    }
+
+    /// An attack's wind-up (each move's TriggerMove: PlayMoveAnim(clip, rate, blend in, out)).
+    fn melee(&mut self, kind: MeleeKind, left: bool, c: &Controller, arms: &FaithArms) {
+        self.melee_left = left;
+        let lr = |l: &'static str, r: &'static str| if left { l } else { r };
+        match kind {
+            MeleeKind::Punch => self.oneshot_rate(lr("MeleeStartLeft", "MeleeStartRight"), arms, 1.5, 0.1, 0.1),
+            MeleeKind::Crouch => self.oneshot_rate("MeleeCrouchStart", arms, 1.0, 0.1, 0.1),
+            MeleeKind::AirKick => match c.melee.map_or(0, |m| m.air_type) {
+                0 => self.oneshot_rate("MeleeInAir", arms, 1.0, 0.1, 0.2),
+                1 => self.oneshot_rate("MeleeInAirStill", arms, 1.0, 0.1, 0.2),
+                _ => self.oneshot_rate("MeleeFromAbove", arms, 1.0, 0.1, 0.1),
+            },
+            MeleeKind::SlideKick => self.oneshot_rate("MeleeSlide", arms, 1.0, 0.1, 0.1),
+            MeleeKind::WallRunKick => self.oneshot_rate(lr("MeleeWallRunLeft", "MeleeWallRunRight"), arms, 1.0, 0.1, 0.2),
         }
     }
 
-    fn melee(&mut self, kind: MeleeKind, left: bool, arms: &FaithArms) {
+    /// The follow-through (TriggerHit / TriggerMiss).
+    fn melee_outcome(&mut self, kind: MeleeKind, hit: bool, arms: &FaithArms) {
+        let left = self.melee_left;
         let lr = |l: &'static str, r: &'static str| if left { l } else { r };
-        match kind {
-            // TdMove_Melee: BlendInMissed 0.08
-            MeleeKind::Punch => self.oneshot_then(lr("MeleeStartLeft", "MeleeStartRight"), lr("MeleeMissedLeft", "MeleeMissedRight"), arms, 0.08),
-            MeleeKind::RunKick => self.oneshot_then(lr("MeleeStart2Left", "MeleeStart2Right"), lr("MeleeMissed2Left", "MeleeMissed2Right"), arms, 0.08),
-            MeleeKind::AirKick => self.oneshot("MeleeInAir", arms, None, 0.08),
-            MeleeKind::SlideKick => self.oneshot("MeleeSlide", arms, None, 0.08),
-            MeleeKind::WallRunKick => {
-                let seq = if self.last_wall_side > 0.0 { "MeleeWallRunRight" } else { "MeleeWallRunLeft" };
-                self.oneshot(seq, arms, None, 0.08);
-            }
-            MeleeKind::Uppercut => self.oneshot_then("MeleeCrouchStartUpperCut", "MeleeCrouchHitUppercut", arms, 0.08),
+        match (kind, hit) {
+            // TdMove_Melee: hits at 1.5 x (blend 0.2 / 0.1); misses BlendInMissed 0.08, BlendOutMissed 0.1.
+            (MeleeKind::Punch, true) => self.oneshot_rate(lr("MeleeHitLeft", "MeleeHitRight"), arms, 1.5, 0.2, 0.1),
+            (MeleeKind::Punch, false) => self.oneshot_rate(lr("MeleeMissedLeft", "MeleeMissedRight"), arms, 1.5, 0.08, 0.1),
+            // TdMove_MeleeCrouch: MeleeCrouchHit either way (0.1 / 0.2).
+            (MeleeKind::Crouch, _) => self.oneshot_rate("MeleeCrouchHit", arms, 1.0, 0.1, 0.2),
+            // TdMove_MeleeAir.TriggerDamage: MeleeInAirHit (0.1 / 0.2).
+            (MeleeKind::AirKick, true) => self.oneshot_rate("MeleeInAirHit", arms, 1.0, 0.1, 0.2),
+            _ => {}
         }
     }
 
@@ -469,16 +490,21 @@ impl Driver {
     /// Faith's first-person idles (TdAnimSet 1P), played on request while standing.
     pub const IDLES: [&'static str; 4] = ["standidle1", "standidle2", "standidle3", "edgedetectionidle"];
 
-    /// Play the next idle (standing still on the ground only). Moving ends it.
-    pub fn play_idle(&mut self, c: &Controller, arms: &FaithArms) {
+    /// Play the next idle (standing still on the ground only): whether it started. Moving ends it.
+    pub fn play_idle(&mut self, c: &Controller, arms: &FaithArms) -> bool {
         if c.state != MoveState::Ground || c.crouched || c.horizontal_speed() > 0.3 {
-            return;
+            return false;
         }
         let seq = Self::IDLES[self.next_idle % Self::IDLES.len()];
         self.next_idle += 1;
         self.oneshot(seq, arms, None, 0.3);
         self.set_blend_out(0.3);
+        true
     }
+
+    /// How far the view turns in a frame (radians) before it counts as looking around: a mouse
+    /// resting under a hand still twitches by a count now and then.
+    const VIEW_STILL: f32 = 0.003;
 
     /// TdMove_Walking.UnarmedIdleAnims (AnimName, CNT_Canned, bResetCameraLook).
     pub const AUTO_IDLES: [&'static str; 3] = ["standidle1", "standidle2", "standidle3"];
@@ -505,7 +531,7 @@ impl Driver {
         // TdMove_Walking: walking (CurrentWalkingState > 0), turning the view or any move action
         // stops an idle and restarts the timer; standing still long enough plays one
         // (OnIdleTimer -> PlayIdle: a random UnarmedIdleAnims entry).
-        let view_moved = (c.yaw - self.last_view.0).abs() > 1e-4 || (c.pitch - self.last_view.1).abs() > 1e-4;
+        let view_moved = (c.yaw - self.last_view.0).abs() > Self::VIEW_STILL || (c.pitch - self.last_view.1).abs() > Self::VIEW_STILL;
         self.last_view = (c.yaw, c.pitch);
         let still = c.state == MoveState::Ground && !c.crouched && raw_speed <= 0.3 && !view_moved && c.events.is_empty();
         if !still {
@@ -629,7 +655,8 @@ impl Driver {
                 // TdMove_Swing.AnimBlendTime = 0.15
                 MoveEvent::SwingStart => self.oneshot("swinghardstart", arms, None, 0.15),
                 MoveEvent::SwingJump => self.oneshot("swingjumpoff", arms, Some(0.6), 0.1),
-                MoveEvent::Melee { kind, left } => self.melee(kind, left, arms),
+                MoveEvent::Melee { kind, left } => self.melee(kind, left, c, arms),
+                MoveEvent::MeleeOutcome { kind, hit } => self.melee_outcome(kind, hit, arms),
                 _ => {}
             }
         }
@@ -689,7 +716,7 @@ impl Driver {
             // jump: touching down ends it, blending out over the move's JumpBlendOutTime (0.2).
             // The dodge clips run 0.83 s against ~0.4 s in the air, so without this the dodge
             // pose would hang on over the run cycle.
-            let air_clip = ["dodgejump", "wallrunverticaldodge", "wallrunjump", "JumpSlow", "JumpTurnFly", "swingjumpoff", "MeleeInAir", "SpringBoard"]
+            let air_clip = ["dodgejump", "wallrunverticaldodge", "wallrunjump", "JumpSlow", "JumpTurnFly", "swingjumpoff", "MeleeInAir", "MeleeFromAbove", "SpringBoard"]
                 .iter()
                 .any(|k| o.key.to_ascii_lowercase().starts_with(&k.to_ascii_lowercase()));
             let touched_down = prev.is_some_and(|p| matches!(p, MoveState::Air))

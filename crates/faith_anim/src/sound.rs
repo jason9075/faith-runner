@@ -29,7 +29,19 @@ const FOOT: [(i32, &str); 11] = [
 ];
 const HAND: [(i32, &str); 5] = [(21, "Soft"), (22, "Medium"), (23, "Hard"), (24, "SlowRelease"), (25, "FastRelease")];
 
-const SURFACES: [Surface; 4] = [Surface::Concrete, Surface::Metal, Surface::MetalPipe, Surface::Airduct];
+const SURFACES: [Surface; 11] = [
+    Surface::Concrete,
+    Surface::Metal,
+    Surface::MetalPipe,
+    Surface::Airduct,
+    Surface::Wood,
+    Surface::MetalGantry,
+    Surface::MetalLadder,
+    Surface::MetalFence,
+    Surface::Cardboard,
+    Surface::Water,
+    Surface::Glass,
+];
 
 pub const RUN_WIND: &str = "A_Character_Effects.Movement.RunWind";
 
@@ -38,18 +50,29 @@ pub const RUN_WIND: &str = "A_Character_Effects.Movement.RunWind";
 pub fn step_cue_on(n: i32, surface: Surface) -> Option<String> {
     let n = n.abs();
     if let Some((_, name)) = FOOT.iter().find(|(k, _)| *k == n) {
+        // The footstep sets in A_Material_Footstep (no fence or pipe sets: plain metal).
         let group = match surface {
             Surface::Concrete => "Concrete",
-            Surface::Metal | Surface::MetalPipe => "Metal",
+            Surface::Metal | Surface::MetalPipe | Surface::MetalFence => "Metal",
             Surface::Airduct => "Metal_Airduct",
+            Surface::Wood => "Wood",
+            Surface::MetalGantry => "MetalGantry",
+            Surface::MetalLadder => "Metal_Ladder",
+            Surface::Cardboard => "Cardboard",
+            Surface::Water => "Water",
+            Surface::Glass => "Glass",
         };
         return Some(format!("A_Material_Footstep.{group}._{n:02}_Female_FootStep{name}"));
     }
+    // The handstep sets in A_Material_Handstep (none for wood, cardboard, water or glass:
+    // concrete, as the step falls back to).
     let group = match surface {
-        Surface::Concrete => "Concrete",
-        Surface::Metal => "Metal",
+        Surface::Concrete | Surface::Wood | Surface::Cardboard | Surface::Water | Surface::Glass => "Concrete",
+        Surface::Metal | Surface::MetalGantry => "Metal",
         Surface::MetalPipe => "Metal_Pipe_Thin",
         Surface::Airduct => "Metal_Airduct",
+        Surface::MetalLadder => "Metal_Ladder",
+        Surface::MetalFence => "Metal_Fence",
     };
     HAND.iter().find(|(k, _)| *k == n).map(|(_, name)| format!("A_Material_Handstep.{group}._{n}_Female_HandStep{name}"))
 }
