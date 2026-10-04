@@ -1709,9 +1709,14 @@ fn walks_up_city_stairs_as_triangles() {
         let w = MeshWorld::new(tris, vec![]);
         let mut c = ctrl_at(Vec3::ZERO);
         let mut top: f32 = 0.0;
-        for _ in 0..240 {
-            c.step(DT, &Input { move_axis: Vec2::new(0.0, 0.4), ..Default::default() }, &w);
-            top = top.max(c.feet.y);
+        for push in [0.4f32, 1.0] {
+            c = ctrl_at(Vec3::ZERO);
+            for _ in 0..240 {
+                c.step(DT, &Input { move_axis: Vec2::new(0.0, push), ..Default::default() }, &w);
+                top = top.max(c.feet.y);
+                // Stairs aren't a slope to slide down.
+                assert!(!matches!(c.state, State::RumpSlide { .. }), "rise {rise} push {push}: rump slide at {:?}", c.feet);
+            }
         }
         assert!(top > rise * 6.0 - 0.01, "rise {rise}: got to {top}, {:?}", c.feet);
     }

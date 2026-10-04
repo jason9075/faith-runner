@@ -137,6 +137,8 @@ impl World for Layered<'_> {
 const TOUCH: f32 = 1e-4;
 /// How far a box may have sunk into a triangle surface and still be held by it (MeshWorld).
 const SKIN: f32 = 0.05;
+/// How high a lip in the floor the box is lifted over (slide_move).
+const LIP: f32 = 0.05;
 
 /// Sweep a box against one axis-aligned box: (fraction, normal) of the first contact. The
 /// usual slab test on the box grown by `half`, with the overlap judged strictly (TOUCH): a
@@ -590,21 +592,23 @@ pub fn slide_move(world: &dyn World, body: Body, feet: &mut Vec3, delta: Vec3) -
                 break;
             }
             Some(h) => {
+                let progress = rem.length() * h.t;
                 *feet += rem * h.t;
                 rem *= 1.0 - h.t;
-                // A flat top met by a level move can only be the edge of one above the feet (a
-                // step whose front has no collision of its own, as in some games' stairs): a
-                // step, not a slope. It stops the move like a riser, so the walk's step-up takes it.
-                if h.normal.y > 0.98 {
-                    let n = -rem.normalize_or_zero();
-                    normals.push(n);
-                    break;
-                }
                 if h.normal.y >= WALKABLE {
                     // Ground you can walk up: carry on along it, up the slope.
                     let into = rem.dot(h.normal);
                     if into < 0.0 {
                         rem -= h.normal * into;
+                    } else if progress < 0.001 {
+                        // Stopped dead by the edge of something flat just above the feet (a
+                        // seam where two floors meet a centimetre apart): over it, as a foot
+                        // would. The walk settles her onto it after.
+                        let lifted = move_axis(world, body, feet, 1, LIP);
+                        if !lifted.blocked {
+                            continue;
+                        }
+                        break;
                     }
                     continue;
                 }

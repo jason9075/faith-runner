@@ -12,7 +12,7 @@ use crate::tuning::Tuning;
 use crate::vault::{self, Vault};
 pub use crate::climb::{ClimbStart, ClimbStep, Ladder};
 pub use crate::airbarge::AirBargePhase;
-use crate::world::{closest_on_segment, column_top, find_ledge, move_axis, slide_move, probe_wall, trace_box, trace_wall, Aabb, Body, Fixture, WallHit, WithDoors, World};
+use crate::world::{closest_on_segment, column_top, find_ledge, move_axis, slide_move, probe_wall, tops_below, trace_box, trace_wall, Aabb, Body, Fixture, WallHit, WithDoors, World};
 
 /// One frame of player input. Buttons are "pressed this frame" edges plus
 /// "held" levels; `look` is the mouse/stick delta in radians.
@@ -1426,6 +1426,11 @@ impl Controller {
         if self.try_into_climb(input, world) {
             return;
         }
+        // Coming down on ground too steep to stand on: the rump slide (TdMove_Falling hands over
+        // to it as the walk would).
+        if self.vel.y <= 0.0 && self.try_rump_slide(world) {
+            return;
+        }
         let tu = self.tuning.clone();
         self.air_time += dt;
 
@@ -2723,6 +2728,24 @@ impl Controller {
             self.vel.y = 0.0;
             if d.y < 0.0 && !on_ground {
                 self.land(-vy_before, world);
+            }
+        }
+
+        // Walked into a step with no front to it (some games' stairs are only their tops) or
+        // over a seam: onto its top, as the step-up would have, if there's room.
+        if on_ground {
+            let hw = body.half_width - 0.02;
+            // Where she is, and where she was going if something stopped her.
+            let want = start + Vec3::new(d.x, 0.0, d.z) + horiz(d).normalize_or_zero() * 0.03;
+            let short = horiz(want - self.feet).length() > 1e-4;
+            for at in [Some(self.feet), short.then_some(want)].into_iter().flatten() {
+                let Some(&top) = tops_below(world, at, hw, start.y + step_height, self.feet.y + 0.005).first() else { continue };
+                let up = Vec3::new(at.x, top, at.z);
+                if world.is_free(&body.aabb(up + Vec3::Y * 0.001)) {
+                    self.offset_mesh(self.feet.y - top);
+                    self.feet = up;
+                    break;
+                }
             }
         }
 

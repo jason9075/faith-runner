@@ -10,6 +10,9 @@
 //!   `crouchslideintoend45` (in 0.15, out 0.2), then the AnimTree's `crouchslideend45` loop.
 //! - **Until** she's on ground flat enough again: the move raises WalkableFloorZ to
 //!   MinSlideFloorZ (0.9) while it lasts. RedoMoveTime 1 s.
+//!
+//! Not the game's: the slope is checked against the ground's own fall (the normal from a box can
+//! be a step's edge), and a slide that's stopped dead for half a second ends.
 
 use glam::Vec3;
 
@@ -45,6 +48,25 @@ impl Controller {
         Some(hit.normal)
     }
 
+    /// The floor's normal comes from a small box swept down, which can catch a step's edge and
+    /// read it as a steep slope (Mirror's Edge's cylinder on its smooth collision doesn't). The
+    /// ground has to fall away along it as that slope says, on both sides of her, which stairs don't.
+    fn slope_is_real(&self, n: Vec3, world: &dyn World) -> bool {
+        let d = horiz(downhill(n)).normalize_or_zero();
+        let tan = (1.0 - n.y * n.y).max(0.0).sqrt() / n.y.max(1e-3);
+        // The first surface down a thin trace (any slope: tops_below only sees walkable ones).
+        let top = |p: Vec3| {
+            let start = Vec3::new(p.x, self.feet.y + 0.4, p.z);
+            world.sweep(Vec3::splat(0.005), start, Vec3::new(0.0, -1.0, 0.0)).map(|h| start.y - h.t)
+        };
+        let (Some(hi), Some(mid), Some(lo)) = (top(self.feet - d * 0.15), top(self.feet), top(self.feet + d * 0.15)) else { return false };
+        // Falling away on both sides of her feet, each about as the slope says (a stair is flat
+        // on one side of its edge and a whole step on the other).
+        let want = 0.15 * tan;
+        let ok = |fall: f32| fall > want * 0.5 && fall < want * 1.5 + 0.03;
+        ok(hi - mid) && ok(mid - lo)
+    }
+
     /// TdMove_RumpSlide.CanDoMove and StartMove.
     pub(crate) fn try_rump_slide(&mut self, world: &dyn World) -> bool {
         if self.rump_redo > 0.0 {
@@ -55,6 +77,9 @@ impl Controller {
             return false;
         }
         let down = downhill(n);
+        if !self.slope_is_real(n, world) {
+            return false;
+        }
         self.vel = down * self.vel.length() * 0.75;
         self.crouched = false;
         self.state = State::RumpSlide { t: 0.0, air: 0.0, face: yaw_of(horiz(down)) };
@@ -73,6 +98,12 @@ impl Controller {
                 self.state = State::Ground;
                 return;
             }
+        }
+        // Held fast by odd geometry (not a slope after all): walking again.
+        if t > 0.5 && self.vel.length() < 0.05 {
+            self.rump_redo = 1.0;
+            self.state = State::Ground;
+            return;
         }
         let air = if n.is_some() { 0.0 } else { air + dt };
         if air > 0.5 {
