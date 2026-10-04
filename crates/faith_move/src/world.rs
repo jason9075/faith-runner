@@ -74,6 +74,8 @@ pub enum Fixture {
     /// A soft landing object (mattress, cardboard: TdMove_Landing.IsLandingOnSoftObject). The
     /// pad itself is an ordinary solid box; this marks its top as soft.
     SoftPad { b: Aabb },
+    /// A ladder or drainpipe (TdLadderVolume).
+    Ladder(crate::climb::Ladder),
 }
 
 /// Where a swept box first touched something.
@@ -590,6 +592,14 @@ pub fn slide_move(world: &dyn World, body: Body, feet: &mut Vec3, delta: Vec3) -
             Some(h) => {
                 *feet += rem * h.t;
                 rem *= 1.0 - h.t;
+                // A flat top met by a level move can only be the edge of one above the feet (a
+                // step whose front has no collision of its own, as in some games' stairs): a
+                // step, not a slope. It stops the move like a riser, so the walk's step-up takes it.
+                if h.normal.y > 0.98 {
+                    let n = -rem.normalize_or_zero();
+                    normals.push(n);
+                    break;
+                }
                 if h.normal.y >= WALKABLE {
                     // Ground you can walk up: carry on along it, up the slope.
                     let into = rem.dot(h.normal);

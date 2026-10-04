@@ -101,6 +101,8 @@ struct Game {
     shot: Shot,
     /// Per-move look constraints (TdMove Min/MaxLookConstraint).
     look: faith_move::LookLimiter,
+    /// Mirror's Edge's Reaction Time (Left Alt, left stick click): slows the app's clock.
+    reaction: faith_move::reaction::ReactionTime,
 }
 
 /// The maps, in the order M cycles through them.
@@ -138,6 +140,19 @@ fn spawn_level(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &LevelM
     }
     // Cables and bars: thin boxes stretched between their ends; doors, wire and pads as boxes.
     for (i, f) in level.fixtures.iter().enumerate() {
+        if let Fixture::Ladder(l) = *f {
+            for (a, b, thick) in l.rods() {
+                let len = a.distance(b);
+                let rot = Quat::from_rotation_arc(Vec3::Z, (b - a) / len);
+                commands.spawn((
+                    LevelGeom,
+                    Mesh3d(meshes.add(Cuboid::new(thick, thick, len))),
+                    MeshMaterial3d(mats.metal.clone()),
+                    Transform::from_translation((a + b) * 0.5).with_rotation(rot),
+                ));
+            }
+            continue;
+        }
         let (a, b, thick) = match *f {
             Fixture::ZipLine { a, b } => (a, b, 0.025),
             Fixture::SwingPole { a, b } => (a, b, 0.06),
@@ -158,7 +173,7 @@ fn spawn_level(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &LevelM
                 commands.spawn((LevelGeom, Mesh3d(meshes.add(box_mesh(&b))), MeshMaterial3d(mats.metal.clone())));
                 continue;
             }
-            Fixture::Beam { .. } | Fixture::SoftPad { .. } => continue,
+            Fixture::Beam { .. } | Fixture::SoftPad { .. } | Fixture::Ladder(_) => continue,
         };
         let len = a.distance(b);
         let rot = Quat::from_rotation_arc(Vec3::Z, (b - a) / len);
@@ -303,6 +318,7 @@ fn setup_world(
         fx: CameraFx::default(),
         shot: Shot::default(),
         look: Default::default(),
+        reaction: Default::default(),
     });
 }
 
@@ -488,7 +504,7 @@ Shift / C crouch, slide, roll (tap before landing)
 A or D + Space dodge (look 90 right, dodge left = top speed)
 Q 180 turn (on a wall: climb, Q, Space to kick)  |  Left mouse (or F) attack, barge doors  |  G idle
 Balance beam: left/right against the lean  |  Swing: hold W, Space on the forward swing
-R respawn  |  1-6 checkpoints  |  M next map  |  F1 help  |  F2 ME/procedural  |  Esc mouse
+Left Alt Reaction Time  |  R respawn  |  1-6 checkpoints  |  M next map  |  F1 help  |  F2 ME/procedural  |  Esc mouse
 Pad: sticks  |  A/LB jump  |  B/LT crouch  |  Y turn  |  X kick  |  Select respawn";
 
 // ------------------------------------------------------------------ systems
@@ -564,6 +580,7 @@ fn play(
     mut camera: Query<(&mut Transform, &mut Projection), With<PlayerCamera>>,
     settings: Res<settings::Settings>,
     menu: Res<settings::Menu>,
+    mut virtual_time: ResMut<Time<Virtual>>,
 ) {
     let dt = time.delta_secs();
     let game = &mut *game;
@@ -590,6 +607,7 @@ fn play(
         input.look = Vec2::new(-d.x, -d.y) * game.mouse_sens * settings.sensitivity;
     }
     let mut respawn = keys.just_pressed(KeyCode::KeyR);
+    let mut reaction = keys.just_pressed(KeyCode::AltLeft);
 
     for pad in &pads {
         let l = pad.left_stick();
@@ -607,6 +625,7 @@ fn play(
         input.crouch_held |= crouch.iter().any(|b| pad.pressed(*b));
         input.turn_pressed |= pad.just_pressed(GamepadButton::North);
         input.melee_pressed |= pad.just_pressed(GamepadButton::West);
+        reaction |= pad.just_pressed(GamepadButton::LeftThumb);
         respawn |= pad.just_pressed(GamepadButton::Select);
     }
     input.strafe_raw = mv.x.clamp(-1.0, 1.0);
@@ -639,6 +658,20 @@ fn play(
 
     // ---- simulate (freeze while the mouse is released so you can alt-tab)
     if (game.locked || !pads.is_empty() || game.scripted.is_some()) && !menu.open {
+        // TdPlayerController.UpdateReactionTime: the game's speed is the app's clock (dt is
+        // already slowed by it).
+        let (was_full, was_on) = (game.reaction.energy >= 100.0, game.reaction.active);
+        if reaction {
+            game.reaction.attempt();
+        }
+        let speed = game.reaction.update(dt, game.ctrl.vel.length());
+        if !was_full && game.reaction.energy >= 100.0 {
+            game.flash = Some(("REACTION TIME READY - Left Alt".to_string(), 0.0));
+        }
+        if !was_on && game.reaction.active {
+            game.flash = Some(("REACTION TIME".to_string(), 0.0));
+        }
+        virtual_time.set_relative_speed(speed);
         let world = &game.world;
         game.ctrl.step(dt, &input, world);
         let g = &mut *game;
@@ -715,6 +748,12 @@ fn flash_label(e: MoveEvent) -> Option<&'static str> {
         MoveEvent::Dodge { .. } => "DODGE",
         MoveEvent::WallRunDodge { .. } => "WALLRUN DODGE",
         MoveEvent::WallClimbDodge { .. } => "WALLCLIMB DODGE",
+        MoveEvent::RumpSlide => "RUMP SLIDE",
+        MoveEvent::GrabTransfer => "GRAB TRANSFER",
+        MoveEvent::AirBarge => "AIR BARGE",
+        MoveEvent::Vertigo => "VERTIGO",
+        MoveEvent::SwingToSwing => "SWING JUMP",
+        MoveEvent::ClimbStart { .. } => "LADDER",
         MoveEvent::HardLand => "HARD LANDING - tap crouch just before you land",
         MoveEvent::Death => "RESPAWN",
         _ => return None,
