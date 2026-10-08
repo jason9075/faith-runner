@@ -14,6 +14,8 @@ pub use crate::climb::{ClimbStart, ClimbStep, Ladder};
 pub use crate::airbarge::AirBargePhase;
 use crate::world::{closest_on_segment, column_top, find_ledge, move_axis, slide_move, probe_wall, tops_below, trace_box, trace_wall, Aabb, Body, Fixture, WallHit, WithDoors, World};
 
+pub mod diagnostics;
+
 /// One frame of player input. Buttons are "pressed this frame" edges plus
 /// "held" levels; `look` is the mouse/stick delta in radians.
 #[derive(Clone, Copy, Debug, Default)]
@@ -1532,26 +1534,21 @@ impl Controller {
             && self.vel.y > 0.0
             && h.dot(fwd) >= 0.0
         {
-            if let Some(hit) = trace_wall(world, body, self.feet, fwd, uu(8.0), tu.stand_height - uu(64.0)) {
+            if let Some(hit) = self.find_wallclimb(world) {
                 let (n, gap) = (hit.n, hit.gap);
-                // The same wall carries on up to WallClimbingMinWallHeight.
-                let tall = trace_wall(world, body, self.feet, -n, gap + 0.1, tu.wallclimb_min_wall_height - 0.02)
-                    .is_some_and(|h| h.n.dot(n) > 0.9);
-                if fwd.dot(-n) >= tu.wallclimb_max_angle_deg.to_radians().cos() && tall {
-                    // TdMove_WallClimb.ReachedWall: the boost grows with how far past run speed
-                    // you came in (less the jump's JumpAddXY) and how fast you were still rising.
-                    let into = speed - tu.jump_add_forward;
-                    let xy = ((into - tu.run_speed).max(0.0) / (tu.wallclimb_add_xy_max_speed - tu.run_speed)).clamp(0.0, 1.0);
-                    let z = (self.vel.y / tu.wallclimb_add_z_max_speed).clamp(0.0, 1.0);
-                    let height = tu.wallclimb_add_xy_height * xy + tu.wallclimb_add_z_height * z;
-                    self.vel = Vec3::Y * (4.0 * height * tu.wallclimb_gravity).sqrt();
-                    self.feet += -n * gap;
-                    self.climbed_this_air = true;
-                    self.state = State::WallClimb { normal: n, t: 0.0 };
-                    self.jump_buffer = 0.0;
-                    self.events.push(Event::WallClimbStart);
-                    return true;
-                }
+                // TdMove_WallClimb.ReachedWall: the boost grows with how far past run speed
+                // you came in (less the jump's JumpAddXY) and how fast you were still rising.
+                let into = speed - tu.jump_add_forward;
+                let xy = ((into - tu.run_speed).max(0.0) / (tu.wallclimb_add_xy_max_speed - tu.run_speed)).clamp(0.0, 1.0);
+                let z = (self.vel.y / tu.wallclimb_add_z_max_speed).clamp(0.0, 1.0);
+                let height = tu.wallclimb_add_xy_height * xy + tu.wallclimb_add_z_height * z;
+                self.vel = Vec3::Y * (4.0 * height * tu.wallclimb_gravity).sqrt();
+                self.feet += -n * gap;
+                self.climbed_this_air = true;
+                self.state = State::WallClimb { normal: n, t: 0.0 };
+                self.jump_buffer = 0.0;
+                self.events.push(Event::WallClimbStart);
+                return true;
             }
         }
 
@@ -1619,6 +1616,18 @@ impl Controller {
             }
         }
         false
+    }
+
+    /// Shared by the actual climb and its read-only entry diagnostics.
+    fn find_wallclimb(&self, world: &dyn World) -> Option<WallHit> {
+        let tu = &self.tuning;
+        let body = self.body();
+        let fwd = forward(self.yaw);
+        let hit = trace_wall(world, body, self.feet, fwd, uu(8.0), tu.stand_height - uu(64.0))?;
+        // The same wall carries on up to WallClimbingMinWallHeight.
+        let tall = trace_wall(world, body, self.feet, -hit.n, hit.gap + 0.1, tu.wallclimb_min_wall_height - 0.02)
+            .is_some_and(|h| h.n.dot(hit.n) > 0.9);
+        (fwd.dot(-hit.n) >= tu.wallclimb_max_angle_deg.to_radians().cos() && tall).then_some(hit)
     }
 
     /// The wall search in TdMove_WallRun.CanDoMove: the native FindWallSide (0x11f5a10) when
@@ -2813,4 +2822,3 @@ fn swing_feet(at: Vec3, dir: Vec3, angle: f32, l: f32) -> Vec3 {
     let com = at + (dir * angle.sin() - Vec3::Y * angle.cos()) * l;
     com - Vec3::Y * 0.9
 }
-

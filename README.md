@@ -32,7 +32,21 @@ It opens on a **settings menu**: master volume, music, effects, mouse sensitivit
 | Next map | M | |
 | Settings menu (pauses) | Esc | |
 | Toggle help | F1 | |
+| Toggle parkour debug panel | F3 | |
+| Freeze / resume debug readings (gameplay continues) | F4 | |
+| Toggle first-person / chase camera | F5 | |
+| Toggle ledge hints / jump arc / vault target | F6 / F7 / F8 | |
 | Mirror's Edge body ↔ procedural arms | F2 | |
+
+## Parkour debug panel
+
+The right-side inspector is visible during play. It shows the current move and how it works, horizontal/vertical speed, forward speed, sprint charge, fall distance, and the jump-buffer and landing-roll timers. Input indicators show the effective keyboard, controller, or scripted input; brief button presses stay lit momentarily so they are readable.
+
+**Entry checks** show the first unmet condition for jumping, sliding, vaulting, wallrunning, wallclimbing, and landing rolls. They use the current tuning and the controller's wall/vault collision probes. **PASS** means the listed entry conditions are met at the current position; nearby fixtures and higher-priority moves can still take precedence. **ACTIVE** marks a move already in progress. Recent moves remain visible below the checks.
+
+Press **F3** to hide/show the panel, or **F4** to freeze/resume its displayed snapshot while gameplay continues. The panel remains visible when **Esc** opens settings: click its buttons to change the camera and hints while paused. It scales to fit smaller windows. The controls help is at the lower left; **F1** toggles it independently.
+
+**F5** switches between first-person and a chase camera that stops before walls. It shows Faith's installed body when available, otherwise a capsule representing the player's changing collision height. **F6** shows nearby ledge segments with clear hanging and pull-up space (green), highlighting current grab range in cyan. These are spatial candidates; movement state, approach and cooldowns still affect grabbing. **F7** draws a yellow ballistic jump/fall guide ending at first collision; it excludes steering, dodges and automatic parkour transitions. **F8** draws an orange vault path and target when the vault planner finds a route or a vault is active. Each hint can be toggled independently in the panel, even with readings frozen; hiding the panel leaves enabled world hints visible.
 
 ## The moves
 

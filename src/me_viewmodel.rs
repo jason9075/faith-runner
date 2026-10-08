@@ -255,6 +255,7 @@ pub fn animate(
     mut proc_arms: Query<&mut Visibility, With<Arm>>,
     mut roots: Query<(&mut Transform, &mut Visibility), (Without<Arm>, Without<PlayerCamera>, Without<ViewmodelCamera>)>,
     mut layers: Query<&mut RenderLayers, Without<ViewmodelCamera>>,
+    debug: Res<crate::parkour_debug::Options>,
 ) {
     let Some(mut me) = me else { return };
     let me = &mut *me;
@@ -286,7 +287,7 @@ pub fn animate(
     // TdMove.FirstPersonDPG: the body normally draws over the world (SDPG_Foreground, our
     // viewmodel layer); swinging and pipe climbing use SDPG_Intermediate, depth-tested against
     // the world, so the bar hides the fingers wrapped round it.
-    let arms_layer = if frame.intermediate { RenderLayers::layer(0) } else { RenderLayers::layer(VIEWMODEL_LAYER) };
+    let arms_layer = if frame.intermediate || debug.chase { RenderLayers::layer(0) } else { RenderLayers::layer(VIEWMODEL_LAYER) };
     for p in me.parts.iter().filter(|p| !p.legs) {
         for &e in &p.sections {
             if let Ok(mut l) = layers.get_mut(e) {

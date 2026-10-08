@@ -4,6 +4,8 @@
 //! shell around it: rendering, input, camera, HUD.
 
 mod audio;
+mod debug_hud;
+mod parkour_debug;
 
 // The Mirror's Edge prologue map (FAITH_MAP=prologue): built with `--features prologue`.
 #[cfg(feature = "prologue")]
@@ -47,9 +49,12 @@ fn main() {
         })
         .add_systems(
             Startup,
-            (setup_world, setup_hud, viewmodel::setup, me_viewmodel::setup, settings::setup, audio::setup, capture::setup).chain(),
+            (setup_world, setup_hud, viewmodel::setup, me_viewmodel::setup, settings::setup, audio::setup, capture::setup, debug_hud::setup).chain(),
         );
-    let game = (switch_level, play, swing_doors, viewmodel::animate, me_viewmodel::animate, audio::play, update_hud).chain();
+    app.init_resource::<parkour_debug::Options>()
+        .add_systems(Startup, parkour_debug::setup)
+        .add_systems(PostUpdate, parkour_debug::labels.after(bevy::transform::TransformSystems::Propagate));
+    let game = (switch_level, play, swing_doors, viewmodel::animate, me_viewmodel::animate, parkour_debug::camera, audio::play, update_hud, debug_hud::update, parkour_debug::draw).chain();
     #[cfg(feature = "prologue")]
     {
         app.add_plugins((me_level::MeLevelPlugin, me_post::MePostPlugin))
@@ -95,6 +100,9 @@ struct Game {
     flash: Option<(String, f32)>,
     /// Input supplied by a script instead of the keyboard (screenshot capture mode).
     scripted: Option<MoveInput>,
+    /// Effective keyboard, gamepad or scripted input shown by the parkour inspector.
+    debug_input: MoveInput,
+    debug_running: bool,
     /// Bob, shake, tilt and FOV layered on the controller's plain view.
     fx: CameraFx,
     /// This frame's final camera (also drives the viewmodel's timing).
@@ -315,6 +323,8 @@ fn setup_world(
         last_time: None,
         flash: None,
         scripted: None,
+        debug_input: MoveInput::default(),
+        debug_running: false,
         fx: CameraFx::default(),
         shot: Shot::default(),
         look: Default::default(),
@@ -478,8 +488,18 @@ fn setup_hud(mut commands: Commands) {
         Text::new(HELP),
         font(14.0),
         TextColor(Color::srgb(0.08, 0.08, 0.1)),
-        TextLayout::justify(Justify::Right),
-        Node { position_type: PositionType::Absolute, top: px(14.0), right: px(16.0), ..default() },
+        TextLayout::justify(Justify::Left),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(16.0),
+            left: px(16.0),
+            width: percent(55.0),
+            max_width: px(1000.0),
+            padding: UiRect::all(px(10.0)),
+            border_radius: BorderRadius::all(px(6.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.94, 0.96, 0.98, 0.85)),
     ));
 
     commands.spawn((
@@ -504,7 +524,9 @@ Shift / C crouch, slide, roll (tap before landing)
 A or D + Space dodge (look 90 right, dodge left = top speed)
 Q 180 turn (on a wall: climb, Q, Space to kick)  |  Left mouse (or F) attack, barge doors  |  G idle
 Balance beam: left/right against the lean  |  Swing: hold W, Space on the forward swing
-Left Alt Reaction Time  |  R respawn  |  1-6 checkpoints  |  M next map  |  F1 help  |  F2 ME/procedural  |  Esc mouse
+Left Alt Reaction Time  |  R respawn  |  1-6 checkpoints  |  M next map
+F1 help  |  F2 ME/procedural  |  F3 debug panel  |  F4 freeze readings  |  Esc settings
+F5 chase camera  |  F6 edges  |  F7 jump arc  |  F8 vault target
 Pad: sticks  |  A/LB jump  |  B/LT crouch  |  Y turn  |  X kick  |  Select respawn";
 
 // ------------------------------------------------------------------ systems
@@ -657,7 +679,9 @@ fn play(
     }
 
     // ---- simulate (freeze while the mouse is released so you can alt-tab)
-    if (game.locked || !pads.is_empty() || game.scripted.is_some()) && !menu.open {
+    game.debug_running = (game.locked || !pads.is_empty() || game.scripted.is_some()) && !menu.open;
+    game.debug_input = if game.debug_running { input } else { MoveInput::default() };
+    if game.debug_running {
         // TdPlayerController.UpdateReactionTime: the game's speed is the app's clock (dt is
         // already slowed by it).
         let (was_full, was_on) = (game.reaction.energy >= 100.0, game.reaction.active);
